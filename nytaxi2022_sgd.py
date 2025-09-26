@@ -150,44 +150,61 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     epoch = 0
 
     while epoch < num_epochs:
-        # Mini-batch sampling without replacement
-        idx = np.random.choice(len(X_train), batch_size, replace=False)
-        X_batch = X_train[idx].astype(np.float64)
-        y_batch = y_train[idx].reshape(-1, 1).astype(np.float64)
+        # Shuffle all data at the start of each epoch
+        perm = np.random.permutation(len(X_train))
+        X_train_shuffled = X_train[perm]
+        y_train_shuffled = y_train[perm]
+        
+        epoch_loss = 0
+        num_batches = 0
 
-        # Forward
-        Z1 = X_batch @ W1 + b1                      # linear output of hidden layer
-        A1 = activation(Z1.astype(np.float64))      # activation output of hidden layer
-        Z2 = A1 @ W2 + b2                           # final predicted value
-        y_pred = Z2
-        
-        loss = np.mean((y_pred - y_batch)**2)
-        train_loss_history.append(loss)
-        
-        # Check convergence
-        if loss < best_loss - epsilon:
-            best_loss = loss
+        # Iterate through all mini-batches in the epoch
+        for start_idx in range(0, len(X_train), batch_size):
+            end_idx = min(start_idx + batch_size, len(X_train))
+            X_batch = X_train_shuffled[start_idx:end_idx].astype(np.float64)
+            y_batch = y_train_shuffled[start_idx:end_idx].reshape(-1, 1).astype(np.float64)
+
+            # Forward
+            Z1 = X_batch @ W1 + b1                      # linear output of hidden layer
+            A1 = activation(Z1.astype(np.float64))      # activation output of hidden layer
+            Z2 = A1 @ W2 + b2                           # final predicted value
+            y_pred = Z2
+            
+            loss = np.mean((y_pred - y_batch)**2)
+            epoch_loss += loss
+            num_batches += 1
+            
+            # Backward
+            dZ2 = (y_pred - y_batch) / X_batch.shape[0]
+            dW2 = A1.T @ dZ2
+            db2 = np.sum(dZ2, axis=0, keepdims=True)
+            dA1 = dZ2 @ W2.T
+            dZ1 = dA1 * activation_deriv(Z1)
+            dW1 = X_batch.T @ dZ1
+            db1 = np.sum(dZ1, axis=0, keepdims=True)
+
+            # Update weights
+            W1 -= learning_rate * dW1
+            b1 -= learning_rate * db1
+            W2 -= learning_rate * dW2
+            b2 -= learning_rate * db2
+            
+        # Average loss for this epoch
+        avg_epoch_loss = epoch_loss / num_batches
+        train_loss_history.append(avg_epoch_loss)
+
+        # Early stopping check
+        if avg_epoch_loss < best_loss - epsilon:
+            best_loss = avg_epoch_loss
             no_improve_count = 0
         else:
-            no_improve_count +=1
+            no_improve_count += 1
             if no_improve_count >= patience:
-                print(f"[Rank {rank}] Early stopping at epoch {epoch} with loss {loss:.6f}")
+                print(f"[Rank {rank}] Early stopping at epoch {epoch} with loss {avg_epoch_loss:.6f}")
                 break
-
-        # Backward
-        dZ2 = (y_pred - y_batch) / batch_size
-        dW2 = A1.T @ dZ2
-        db2 = np.sum(dZ2, axis=0, keepdims=True)
-        dA1 = dZ2 @ W2.T
-        dZ1 = dA1 * activation_deriv(Z1.astype(np.float64))
-        dW1 = X_batch.T @ dZ1
-        db1 = np.sum(dZ1, axis=0, keepdims=True)
-
-        # Update weights
-        W1 -= learning_rate * dW1
-        b1 -= learning_rate * db1
-        W2 -= learning_rate * dW2
-        b2 -= learning_rate * db2
+        
+        if epoch % 5 == 0:
+            print(f"[Rank {rank}] Epoch {epoch}, Loss: {loss:.6f}")  
         
         epoch += 1
 
@@ -195,15 +212,16 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     print(f"[Rank {rank}] Training complete in {train_time:.2f} sec over {epoch} epochs")
     
     # Average model parameters across all processes
-    def average_model(var):
+    def average_weights(var):
         var_avg = np.zeros_like(var)
         comm.Allreduce(var, var_avg, op=MPI.SUM)
         return var_avg / size
 
-    W1 = average_model(W1)
-    b1 = average_model(b1)
-    W2 = average_model(W2)
-    b2 = average_model(b2)
+    comm.Barrier()      # Ensure all processes have finished training
+    W1 = average_weights(W1)
+    b1 = average_weights(b1)
+    W2 = average_weights(W2)
+    b2 = average_weights(b2)
 
     # Evaluate on local training set
     print(f"[Rank {rank}] Evaluating on training set ...")
@@ -301,7 +319,7 @@ if __name__ == "__main__":
     input_dim = X_train.shape[1]
     hidden_dim = 32
     activations = ["relu", "tanh", "sigmoid"]
-    batch_sizes = [16, 32, 64, 128, 256]
+    batch_sizes = [512, 1024, 2048, 4096, 8192]
     
 
     # Train model using SGD with different activation functions and batch sizes
