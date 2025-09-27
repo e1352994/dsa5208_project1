@@ -338,8 +338,8 @@ if __name__ == "__main__":
                 hidden_dim=hidden_dim,
                 activation_name=activation,
                 batch_size=batch_size,
-                num_epochs=50,
-                learning_rate=0.01
+                num_epochs=num_epochs,
+                learning_rate=learning_rate
             )
             
             if loss_history is not None:
