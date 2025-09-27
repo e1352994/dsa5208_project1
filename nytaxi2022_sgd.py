@@ -139,11 +139,12 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     b2 = np.zeros((1, 1), dtype=np.float64)
 
     # To keep track of training loss and time
-    train_loss_history = []
-    start_time = time.time()
+    if rank == 0:
+        train_loss_history = []
+        start_time = time.time()
 
     # Convergence parameters
-    epsilon = 1e-4         # Minimum change in loss
+    epsilon = 0.01         # Minimum change in loss
     patience = 5           # Stop if no improvement for this many epochs
     no_improve_count = 0   # How many epochs we've seen no improvement
     best_loss = float('inf')
@@ -155,7 +156,7 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
         X_train_shuffled = X_train[perm]
         y_train_shuffled = y_train[perm]
         
-        epoch_loss = 0
+        local_epoch_loss = 0
         num_batches = 0
 
         # Iterate through all mini-batches in the epoch
@@ -171,7 +172,7 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
             y_pred = Z2
             
             loss = np.mean((y_pred - y_batch)**2)
-            epoch_loss += loss
+            local_epoch_loss += loss
             num_batches += 1
             
             # Backward
@@ -183,46 +184,60 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
             dW1 = X_batch.T @ dZ1
             db1 = np.sum(dZ1, axis=0, keepdims=True)
 
-            # Update weights
-            W1 -= learning_rate * dW1
-            b1 -= learning_rate * db1
-            W2 -= learning_rate * dW2
-            b2 -= learning_rate * db2
+            # Allreduce gradients
+            dW1_global = np.zeros_like(dW1)
+            db1_global = np.zeros_like(db1)
+            dW2_global = np.zeros_like(dW2)
+            db2_global = np.zeros_like(db2)
+            comm.Allreduce(dW1, dW1_global, op=MPI.SUM)
+            comm.Allreduce(db1, db1_global, op=MPI.SUM)
+            comm.Allreduce(dW2, dW2_global, op=MPI.SUM)
+            comm.Allreduce(db2, db2_global, op=MPI.SUM)
             
-        # Average loss for this epoch
-        avg_epoch_loss = epoch_loss / num_batches
-        train_loss_history.append(avg_epoch_loss)
+            # Update weights on rank 0
+            if rank == 0:
+                W1 -= learning_rate * (dW1_global / size)
+                b1 -= learning_rate * (db1_global / size)
+                W2 -= learning_rate * (dW2_global / size)
+                b2 -= learning_rate * (db2_global / size)
 
-        # Early stopping check
-        if avg_epoch_loss < best_loss - epsilon:
-            best_loss = avg_epoch_loss
-            no_improve_count = 0
-        else:
-            no_improve_count += 1
-            if no_improve_count >= patience:
-                print(f"[Rank {rank}] Early stopping at epoch {epoch} with loss {avg_epoch_loss:.6f}")
-                break
-        
-        if epoch % 5 == 0:
-            print(f"[Rank {rank}] Epoch {epoch}, Loss: {loss:.6f}")  
-        
+            # Broadcast updated weights
+            W1 = comm.bcast(W1, root=0)
+            b1 = comm.bcast(b1, root=0)
+            W2 = comm.bcast(W2, root=0)
+            b2 = comm.bcast(b2, root=0)
+
+        # Reduce and compute global average loss
+        global_epoch_loss = comm.reduce(local_epoch_loss / num_batches, op=MPI.SUM, root=0)
+        stop_flag = False
+
+        if rank == 0:
+            global_avg_loss = global_epoch_loss / size
+            train_loss_history.append(global_avg_loss)
+
+            if epoch % 5 == 0:
+                print(f"[Rank 0] Epoch {epoch}, Loss: {global_avg_loss:.6f}")
+
+            if global_avg_loss < best_loss - epsilon:
+                best_loss = global_avg_loss
+                no_improve_count = 0
+            else:
+                no_improve_count += 1
+                if no_improve_count >= patience:
+                    print(f"[Rank 0] Early stopping at epoch {epoch} with global loss {global_avg_loss:.6f}")
+                    stop_flag = True
+
+        # Broadcast stop_flag
+        stop_flag = comm.bcast(stop_flag, root=0)
+        if stop_flag:
+            break
+
         epoch += 1
 
-    train_time = time.time() - start_time
-    print(f"[Rank {rank}] Training complete in {train_time:.2f} sec over {epoch} epochs")
+    if rank == 0:
+        train_time = time.time() - start_time
+        print(f"[Rank {rank}] Training complete in {train_time:.2f} sec over {epoch} epochs")
     
-    # Average model parameters across all processes
-    def average_weights(var):
-        var_avg = np.zeros_like(var)
-        comm.Allreduce(var, var_avg, op=MPI.SUM)
-        return var_avg / size
-
-    comm.Barrier()      # Ensure all processes have finished training
-    W1 = average_weights(W1)
-    b1 = average_weights(b1)
-    W2 = average_weights(W2)
-    b2 = average_weights(b2)
-
     # Evaluate on local training set
     print(f"[Rank {rank}] Evaluating on training set ...")
     Z1_train = X_train @ W1 + b1
@@ -241,7 +256,6 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     print(f"[Rank {rank}] Reducing results ...")
     avg_train_rmse = comm.reduce(local_rmse_train, op=MPI.SUM, root=0)
     avg_test_rmse = comm.reduce(local_rmse_test, op=MPI.SUM, root=0)
-    total_time = comm.reduce(train_time, op=MPI.SUM, root=0)
 
     if rank == 0:
         # Save results
@@ -268,14 +282,14 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
         print(f"\nActivation: {activation_name}, Batch Size: {batch_size}")
         print(f"   Train RMSE: {avg_train_rmse / size:.4f}")
         print(f"   Test  RMSE: {avg_test_rmse / size:.4f}")
-        print(f"   Avg Time : {total_time / size:.2f} sec\n")
+        print(f"   Training Time : {train_time:.2f} sec\n")
         
     # Free memory
     del W1, b1, W2, b2, Z1, A1, Z2, y_pred
     del Z1_train, A1_train, y_train_pred, Z1_test, A1_test, y_test_pred
     gc.collect()
         
-    return train_loss_history
+    return train_loss_history if rank == 0 else None
 
 # -------------------- Save Loss History --------------------
 def save_loss_history(loss_history, activation, batch_size):
@@ -286,24 +300,16 @@ def save_loss_history(loss_history, activation, batch_size):
     filename = f"{size}_process_loss_{activation}_bs{batch_size}.csv"
     filepath = os.path.join(out_dir, filename)
     
-    df = pd.DataFrame(loss_history, columns=["train_loss"])
-    df["epoch"] = np.arange(len(loss_history))
-    df["rank"] = rank
+    df = pd.DataFrame({
+        "epoch": np.arange(len(loss_history)),
+        "train_loss": loss_history
+    })
     
-    # Gather all losses at root
-    all_losses = comm.gather(df, root=0)
+    if os.path.exists(filepath):
+        os.remove(filepath)
+    df.to_csv(filepath, index=False)
     
-    comm.Barrier()
-    
-    if rank == 0:
-        full_df = pd.concat(all_losses, ignore_index=True)
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        full_df.to_csv(filepath, index=False)
-        
-        print(f"[Rank 0] Saved combined loss history to: {filepath}")
-    else:
-        print(f"[Rank {rank}] sent loss history to root")
+    print(f"[Rank 0] Saved combined loss history to: {filepath}")
 
 
 # Run traning for different configurations (activation functions and batch sizes)
@@ -343,6 +349,7 @@ if __name__ == "__main__":
             )
             
             if loss_history is not None:
+                print(f"[Rank {rank}] Saving loss history ...")
                 save_loss_history(loss_history, activation, batch_size)
             
             # Synchronize all processes before next run
