@@ -144,7 +144,7 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
         start_time = time.time()
 
     # Convergence parameters
-    epsilon = 0.01         # Minimum change in loss
+    epsilon = 0.005         # Minimum change in loss
     patience = 5           # Stop if no improvement for this many epochs
     no_improve_count = 0   # How many epochs we've seen no improvement
     best_loss = float('inf')
@@ -267,7 +267,7 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
             
             # Write headers if file does not exist
             if not file_exists:
-                writer.writerow(["num_of_process", "activation", "batch_size", "train_rmse", "test_rmse", "avg_time_sec"])
+                writer.writerow(["num_of_process", "activation", "batch_size", "train_rmse", "test_rmse", "training_time_sec"])
             
             # Append current run result
             writer.writerow([
@@ -276,7 +276,7 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
                 batch_size,
                 round(avg_train_rmse / size, 4),
                 round(avg_test_rmse / size, 4),
-                round(total_time / size, 2)
+                round(train_time, 2)
             ])
                 
         print(f"\nActivation: {activation_name}, Batch Size: {batch_size}")
@@ -325,7 +325,7 @@ if __name__ == "__main__":
     input_dim = X_train.shape[1]
     hidden_dim = 32
     activations = ["relu", "tanh", "sigmoid"]
-    batch_sizes = [512, 1024, 2048, 4096, 8192]
+    batch_sizes = [1024, 2048, 4096, 8192, 16384]
     
 
     # Train model using SGD with different activation functions and batch sizes
