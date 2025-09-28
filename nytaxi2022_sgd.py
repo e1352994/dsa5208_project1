@@ -105,6 +105,53 @@ def compute_rmse(y_true, y_pred):
     return np.sqrt(np.mean((y_true - y_pred)**2))
 
 
+# -------------------- Save Training Result --------------------
+def save_training_result(activation, batch_size, train_rmse, test_rmse, train_time):
+    output_path = "sgd_training_results.csv"
+    file_exists = os.path.isfile(output_path)
+    
+    # Build DataFrame
+    df = pd.DataFrame({
+        "num_of_process": [size],
+        "activation": [activation],
+        "batch_size": [batch_size],
+        "train_rmse": [round(train_rmse, 4)],
+        "test_rmse": [round(test_rmse, 4)],
+        "training_time_sec": [round(train_time, 2)],
+    })
+
+    # Append or create file
+    if file_exists:
+        df.to_csv(output_path, mode="a", header=False, index=False)
+    else:
+        df.to_csv(output_path, mode="w", header=True, index=False)
+    
+    print(f"[Rank 0] Saved training results to: {output_path}")
+
+
+# -------------------- Save Loss History --------------------
+def save_loss_history(loss_history, activation, batch_size):
+    output_path = "sgd_training_losses.csv"
+    file_exists = os.path.isfile(output_path)
+        
+    # Build DataFrame with all epochs
+    df = pd.DataFrame({
+        "num_of_process": [size] * len(loss_history),
+        "activation": [activation] * len(loss_history),
+        "batch_size": [batch_size] * len(loss_history),
+        "epoch": np.arange(len(loss_history)),
+        "loss": loss_history
+    })
+    
+    # Append or create file
+    if file_exists:
+        df.to_csv(output_path, mode="a", header=False, index=False)
+    else:
+        df.to_csv(output_path, mode="w", header=True, index=False)
+    
+    print(f"[Rank 0] Saved loss history to: {output_path}")
+
+
 # -------------------- SGD Training --------------------
 def run_distributed_sgd(X_train, y_train, X_test, y_test,
                         input_dim, hidden_dim,
@@ -122,6 +169,9 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
         batch_size (int): Mini-batch size.
         num_epochs (int): Max number of training epochs.
         learning_rate (float): Learning rate for SGD.
+    
+    Save global loss history into one CSV file.
+    Only rank 0 writes to the file.
     """
     
     print(f"[Rank {rank}] Starting training with {activation_name}, batch size {batch_size}, training set {X_train.shape}, test set {X_test.shape} ...")
@@ -256,61 +306,27 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     print(f"[Rank {rank}] Reducing results ...")
     avg_train_rmse = comm.reduce(local_rmse_train, op=MPI.SUM, root=0)
     avg_test_rmse = comm.reduce(local_rmse_test, op=MPI.SUM, root=0)
-
+    
+    # Print final results
     if rank == 0:
-        # Save results
-        output_path = "sgd_results.csv"
-        file_exists = os.path.isfile(output_path)
-
-        with open(output_path, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            
-            # Write headers if file does not exist
-            if not file_exists:
-                writer.writerow(["num_of_process", "activation", "batch_size", "train_rmse", "test_rmse", "training_time_sec"])
-            
-            # Append current run result
-            writer.writerow([
-                size,
-                activation_name,
-                batch_size,
-                round(avg_train_rmse / size, 4),
-                round(avg_test_rmse / size, 4),
-                round(train_time, 2)
-            ])
-                
         print(f"\nActivation: {activation_name}, Batch Size: {batch_size}")
         print(f"   Train RMSE: {avg_train_rmse / size:.4f}")
         print(f"   Test  RMSE: {avg_test_rmse / size:.4f}")
         print(f"   Training Time : {train_time:.2f} sec\n")
+
+    # Save training results and losses
+    if rank == 0:
+        print(f"[Rank {rank}] Saving training results ...")
+        save_training_result(activation_name, batch_size, avg_train_rmse, avg_test_rmse, train_time)
+        
+        print(f"[Rank {rank}] Saving training losses ...")
+        save_loss_history(train_loss_history, activation_name, batch_size)
         
     # Free memory
     del W1, b1, W2, b2, Z1, A1, Z2, y_pred
     del Z1_train, A1_train, y_train_pred, Z1_test, A1_test, y_test_pred
     gc.collect()
         
-    return train_loss_history if rank == 0 else None
-
-# -------------------- Save Loss History --------------------
-def save_loss_history(loss_history, activation, batch_size):
-    out_dir = "loss_logs"
-    os.makedirs(out_dir, exist_ok=True)
-    
-    # Build filename and path
-    filename = f"{size}_process_loss_{activation}_bs{batch_size}.csv"
-    filepath = os.path.join(out_dir, filename)
-    
-    df = pd.DataFrame({
-        "epoch": np.arange(len(loss_history)),
-        "train_loss": loss_history
-    })
-    
-    if os.path.exists(filepath):
-        os.remove(filepath)
-    df.to_csv(filepath, index=False)
-    
-    print(f"[Rank 0] Saved combined loss history to: {filepath}")
-
 
 # Run traning for different configurations (activation functions and batch sizes)
 if __name__ == "__main__":
@@ -325,7 +341,7 @@ if __name__ == "__main__":
     input_dim = X_train.shape[1]
     hidden_dim = 32
     activations = ["relu", "tanh", "sigmoid"]
-    batch_sizes = [1024, 2048, 4096, 8192, 16384]
+    batch_sizes = [512, 1024, 2048, 4096, 8192, 16384]
     
 
     # Train model using SGD with different activation functions and batch sizes
@@ -337,7 +353,7 @@ if __name__ == "__main__":
             # Synchronize all processes before starting new run
             comm.Barrier()
             
-            loss_history = run_distributed_sgd(
+            run_distributed_sgd(
                 X_train=X_train, y_train=y_train,
                 X_test=X_test, y_test=y_test,
                 input_dim=input_dim,
@@ -348,20 +364,11 @@ if __name__ == "__main__":
                 learning_rate=learning_rate
             )
             
-            if loss_history is not None:
-                print(f"[Rank {rank}] Saving loss history ...")
-                save_loss_history(loss_history, activation, batch_size)
-            
             # Synchronize all processes before next run
             comm.Barrier()
-            
             if rank == 0:
                 print(f"==== Completed training for activation {activation} with batch size {batch_size} ==== \n")
                 
-            # Free memory
-            del loss_history
-            gc.collect()
-            
     comm.Barrier()  # Ensure all ranks reach this point
     if rank == 0:
         print("[Rank 0] All processes finished. Exiting now.")
