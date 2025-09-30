@@ -26,6 +26,10 @@ def load_and_distribute_data(filename):
         # Load and split dataset
         print(f"[Rank 0] Loading data ...")
         df = pd.read_csv(filename)
+        
+        # Sample a fraction of the data for trial runs
+        df = df.sample(frac=0.3, random_state=42)
+        
         train_df, test_df = train_test_split(df, test_size=0.3, random_state=42)
 
         # Prepare training and test sets
@@ -93,20 +97,10 @@ def sigmoid_deriv(x):
     s = sigmoid(x)
     return s * (1 - s)
 
-# Leaky ReLU
-def leaky_relu(x, alpha=0.01):
-    return np.where(x > 0, x, alpha * x)
-
-def leaky_relu_deriv(x, alpha=0.01):
-    dx = np.ones_like(x)
-    dx[x < 0] = alpha
-    return dx
-
 activation_functions = {
     "relu": (relu, relu_deriv),
     "tanh": (tanh, tanh_deriv),
-    "sigmoid": (sigmoid, sigmoid_deriv),
-    "leaky_relu": (leaky_relu, leaky_relu_deriv)
+    "sigmoid": (sigmoid, sigmoid_deriv)
 }
 
 
@@ -116,8 +110,8 @@ def compute_rmse(y_true, y_pred):
 
 
 # -------------------- Save Training Result --------------------
-def save_training_result(activation, batch_size, train_rmse, test_rmse, train_time):
-    output_path = "sgd_training_results.csv"
+def save_training_result(activation, batch_size, train_rmse, test_rmse, train_time, learning_rate, hidden_dim):
+    output_path = "sgd_training_results_trial.csv"
     file_exists = os.path.isfile(output_path)
     
     # Build DataFrame
@@ -125,6 +119,8 @@ def save_training_result(activation, batch_size, train_rmse, test_rmse, train_ti
         "num_of_process": [size],
         "activation": [activation],
         "batch_size": [batch_size],
+        "learning_rate": [learning_rate],
+        "hidden_dim": [hidden_dim],
         "train_rmse": [round(train_rmse, 4)],
         "test_rmse": [round(test_rmse, 4)],
         "training_time_sec": [round(train_time, 2)],
@@ -140,8 +136,8 @@ def save_training_result(activation, batch_size, train_rmse, test_rmse, train_ti
 
 
 # -------------------- Save Loss History --------------------
-def save_loss_history(loss_history, activation, batch_size):
-    output_path = "sgd_training_losses.csv"
+def save_loss_history(loss_history, activation, batch_size, learning_rate, hidden_dim):
+    output_path = "sgd_training_losses_trial.csv"
     file_exists = os.path.isfile(output_path)
         
     # Build DataFrame with all epochs
@@ -149,6 +145,8 @@ def save_loss_history(loss_history, activation, batch_size):
         "num_of_process": [size] * len(loss_history),
         "activation": [activation] * len(loss_history),
         "batch_size": [batch_size] * len(loss_history),
+        "learning_rate": [learning_rate] * len(loss_history),
+        "hidden_dim": [hidden_dim] * len(loss_history),
         "epoch": np.arange(len(loss_history)),
         "loss": loss_history
     })
@@ -175,7 +173,7 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
         X_test, y_test: Test set for this process.
         input_dim (int): Number of input features.
         hidden_dim (int): Number of hidden units.
-        activation_name (str): Activation function name ("relu", "tanh", "sigmoid", "leaky_relu").
+        activation_name (str): Activation function name ("relu", "tanh", "sigmoid").
         batch_size (int): Mini-batch size.
         num_epochs (int): Max number of training epochs.
         learning_rate (float): Learning rate for SGD.
@@ -184,19 +182,11 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     Only rank 0 writes to the file.
     """
     
-    print(f"[Rank {rank}] Starting training with {activation_name}, batch size {batch_size}, training set {X_train.shape}, test set {X_test.shape} ...")
+    print(f"[Rank {rank}] Starting training with learning rate {learning_rate}, hidden dim {hidden_dim}, training set {X_train.shape}, test set {X_test.shape} ...")
     
     # Get activation function
     activation, activation_deriv = activation_functions[activation_name]
     np.random.seed(42 + rank)
-
-    # Initialize weights
-    # input to hidden
-    W1 = np.random.randn(input_dim, hidden_dim).astype(np.float64) * 0.01
-    b1 = np.zeros((1, hidden_dim), dtype=np.float64)
-    # hidden to output
-    W2 = np.random.randn(hidden_dim, 1).astype(np.float64) * 0.01
-    b2 = np.zeros((1, 1), dtype=np.float64)
 
     # To keep track of training loss and time
     if rank == 0:
@@ -211,6 +201,14 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     epoch = 0
 
     while epoch < num_epochs:
+        # Initialize weights
+        # input to hidden
+        W1 = np.random.randn(input_dim, hidden_dim).astype(np.float64) * 0.01
+        b1 = np.zeros((1, hidden_dim), dtype=np.float64)
+        # hidden to output
+        W2 = np.random.randn(hidden_dim, 1).astype(np.float64) * 0.01
+        b2 = np.zeros((1, 1), dtype=np.float64)
+        
         # Shuffle all data at the start of each epoch
         perm = np.random.permutation(len(X_train))
         X_train_shuffled = X_train[perm]
@@ -266,7 +264,7 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
             b1 = comm.bcast(b1, root=0)
             W2 = comm.bcast(W2, root=0)
             b2 = comm.bcast(b2, root=0)
-
+            
         # Reduce and compute global average loss
         global_epoch_loss = comm.reduce(local_epoch_loss / num_batches, op=MPI.SUM, root=0)
         stop_flag = False
@@ -327,10 +325,10 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     # Save training results and losses
     if rank == 0:
         print(f"[Rank {rank}] Saving training results ...")
-        save_training_result(activation_name, batch_size, avg_train_rmse, avg_test_rmse, train_time)
+        save_training_result(activation_name, batch_size, avg_train_rmse, avg_test_rmse, train_time, learning_rate, hidden_dim)
         
         print(f"[Rank {rank}] Saving training losses ...")
-        save_loss_history(train_loss_history, activation_name, batch_size)
+        save_loss_history(train_loss_history, activation_name, batch_size, learning_rate, hidden_dim)
         
     # Free memory
     del W1, b1, W2, b2, Z1, A1, Z2, y_pred
@@ -347,18 +345,17 @@ if __name__ == "__main__":
     
     # Training parameters
     num_epochs = 50
-    learning_rate = 0.01
+    learning_rates = [0.001, 0.01, 0.1]
     input_dim = X_train.shape[1]
-    hidden_dim = 32
-    activations = ["leaky_relu"]
-    batch_sizes = [512, 1024, 2048, 4096, 8192, 16384]
+    hidden_dims = [32, 64, 128]
+    activation = "relu"
+    batch_size = 1024
     
-
-    # Train model using SGD with different activation functions and batch sizes
-    for activation in activations:
-        for batch_size in batch_sizes:
+    # Train model using SGD with different learning rates and hidden dimensions
+    for learning_rate in learning_rates:
+        for hidden_dim in hidden_dims:
             if rank == 0:
-                print(f"\n==== Strated training for activation {activation} with batch size {batch_size} ====")
+                print(f"\n==== Strated training for learning rate {learning_rate} with hidden dim {hidden_dim} ====")
             
             # Synchronize all processes before starting new run
             comm.Barrier()
@@ -377,7 +374,7 @@ if __name__ == "__main__":
             # Synchronize all processes before next run
             comm.Barrier()
             if rank == 0:
-                print(f"==== Completed training for activation {activation} with batch size {batch_size} ==== \n")
+                print(f"==== Completed training for learning rate {learning_rate} with hidden dim {hidden_dim} ==== \n")
                 
     comm.Barrier()  # Ensure all ranks reach this point
     if rank == 0:
