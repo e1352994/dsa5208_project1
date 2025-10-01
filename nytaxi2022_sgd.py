@@ -23,6 +23,9 @@ def load_and_distribute_data(filename):
     X_train = y_train = X_test = y_test = None
 
     if rank == 0:
+        if not os.path.exists(filename):
+            raise FileNotFoundError(f"[Rank 0] File not found: {filename}")
+        
         # Load and split dataset
         print(f"[Rank 0] Loading data ...")
         df = pd.read_csv(filename)
