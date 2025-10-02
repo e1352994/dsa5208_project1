@@ -32,11 +32,11 @@ def load_and_distribute_data(filename):
         train_df, test_df = train_test_split(df, test_size=0.3, random_state=42)
 
         # Prepare training and test sets
-        X_train_all = train_df.drop(columns=["total_amount"]).values
-        y_train_all = train_df["total_amount"].values
+        X_train_all = train_df.drop(columns=["total_amount"]).astype(np.float32).values
+        y_train_all = train_df["total_amount"].astype(np.float32).values
 
-        X_test_all = test_df.drop(columns=["total_amount"]).values
-        y_test_all = test_df["total_amount"].values
+        X_test_all = test_df.drop(columns=["total_amount"]).astype(np.float32).values
+        y_test_all = test_df["total_amount"].astype(np.float32).values
 
         # Split training and test data into N chunks
         X_train_chunks = np.array_split(X_train_all, size)
@@ -195,11 +195,11 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
 
     # Initialize weights
     # input to hidden
-    W1 = np.random.randn(input_dim, hidden_dim).astype(np.float64) * 0.01
-    b1 = np.zeros((1, hidden_dim), dtype=np.float64)
+    W1 = np.random.randn(input_dim, hidden_dim).astype(np.float32) * 0.01
+    b1 = np.zeros((1, hidden_dim), dtype=np.float32)
     # hidden to output
-    W2 = np.random.randn(hidden_dim, 1).astype(np.float64) * 0.01
-    b2 = np.zeros((1, 1), dtype=np.float64)
+    W2 = np.random.randn(hidden_dim, 1).astype(np.float32) * 0.01
+    b2 = np.zeros((1, 1), dtype=np.float32)
 
     # To keep track of training loss and time
     if rank == 0:
@@ -225,12 +225,12 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
         # Iterate through all mini-batches in the epoch
         for start_idx in range(0, len(X_train), batch_size):
             end_idx = min(start_idx + batch_size, len(X_train))
-            X_batch = X_train_shuffled[start_idx:end_idx].astype(np.float64)
-            y_batch = y_train_shuffled[start_idx:end_idx].reshape(-1, 1).astype(np.float64)
+            X_batch = X_train_shuffled[start_idx:end_idx].astype(np.float32)
+            y_batch = y_train_shuffled[start_idx:end_idx].reshape(-1, 1).astype(np.float32)
 
             # Forward
             Z1 = X_batch @ W1 + b1                      # linear output of hidden layer
-            A1 = activation(Z1.astype(np.float64))      # activation output of hidden layer
+            A1 = activation(Z1.astype(np.float32))      # activation output of hidden layer
             Z2 = A1 @ W2 + b2                           # final predicted value
             y_pred = Z2
             
@@ -304,14 +304,14 @@ def run_distributed_sgd(X_train, y_train, X_test, y_test,
     # Evaluate on local training set
     print(f"[Rank {rank}] Evaluating on training set ...")
     Z1_train = X_train @ W1 + b1
-    A1_train = activation(Z1_train.astype(np.float64))
+    A1_train = activation(Z1_train.astype(np.float32))
     y_train_pred = A1_train @ W2 + b2
     local_rmse_train = compute_rmse(y_train, y_train_pred.squeeze())
 
     # Evaluate on local test set
     print(f"[Rank {rank}] Evaluating on test set ...")
     Z1_test = X_test @ W1 + b1
-    A1_test = activation(Z1_test.astype(np.float64))
+    A1_test = activation(Z1_test.astype(np.float32))
     y_test_pred = A1_test @ W2 + b2
     local_rmse_test = compute_rmse(y_test, y_test_pred.squeeze())
 
@@ -353,7 +353,7 @@ if __name__ == "__main__":
     learning_rate = 0.01
     input_dim = X_train.shape[1]
     hidden_dim = 32
-    activations = ["leaky_relu"]
+    activations = ["relu", "tanh", "sigmoid", "leaky_relu"]
     batch_sizes = [512, 1024, 2048, 4096, 8192, 16384]
     
 
