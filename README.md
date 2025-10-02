@@ -56,10 +56,21 @@ Make sure the cleaned dataset **`nytaxi2022_cleaned.csv`** is in the **project r
 Run the training script using mpirun:
 
 ```bash
-mpirun -n <NUM_PROCESSES> python nytaxi2022_sgd.py
+mpirun -n NUM_PROCESSES --host HOST1,HOST2 python nytaxi2022_sgd.py
 ```
+Replace 
+- `NUM_PROCESSES` with the number of parallel processes (e.g., 3 or 5), based on the number of vCPUs you want to use.
 
-Please change <NUM_PROCESSES> to any number of processes you want to run in parallel based on your CPU cores
+- `HOST1` and `HOST2` with your actual machine hostnames or internal IPs. If you are using more than two machines, separate them with commas.
+
+- alternatively, you can define your hosts in a file and use:
+
+
+```bash
+mpirun -n NUM_PROCESSES --hostfile HOSTFILE_PATH python nytaxi2022_sgd.py
+```
+Replace `HOSTFILE_PATH` with the path to your hostfile.
+
 
 The script will:
 
