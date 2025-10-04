@@ -98,3 +98,9 @@ jupyter notebook nytaxi2022_result_plotting.ipynb
 ```
 
 Plotted results will be saved in the root folder
+
+
+### GitHub Repository
+You can also access the full implementation, training scripts, and result visualizations at the following GitHub repository: https://github.com/e1352994/dsa5208_project1
+
+⚠️ **Note:** The repository does not include the raw or cleaned datasets due to file size constraints and data sharing restrictions.
