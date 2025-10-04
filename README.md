@@ -6,6 +6,7 @@ This project applies distributed stochastic gradient descent (SGD) using MPI (`m
 
 ```bash
 .
+├── nytaxi2022.csv                      # Raw dataset
 ├── nytaxi2022_data_clean.ipynb         # Data preprocessing steps
 ├── nytaxi2022_cleaned.csv              # Cleaned dataset (generated)
 ├── nytaxi2022_sgd_trial.py             # Trial run of distributed SGD
@@ -33,7 +34,7 @@ pip install pandas numpy mpi4py scikit-learn
 
 ### 1. Data Cleaning
 
-The raw dataset file must be named **`nytaxi2022.csv`** and placed in the **project root directory**.  
+The raw dataset file must be named **`nytaxi2022.csv`** and placed in the **project root directory**.
 
 To preprocess the raw data and generate the cleaned dataset, run:
 
@@ -58,19 +59,20 @@ Run the training script using mpirun:
 ```bash
 mpirun -n NUM_PROCESSES --host HOST1,HOST2 python nytaxi2022_sgd.py
 ```
-Replace 
+
+Replace
+
 - `NUM_PROCESSES` with the number of parallel processes (e.g., 3 or 5), based on the number of vCPUs you want to use.
 
 - `HOST1` and `HOST2` with your actual machine hostnames or internal IPs. If you are using more than two machines, separate them with commas.
 
 - alternatively, you can define your hosts in a file and use:
 
-
 ```bash
 mpirun -n NUM_PROCESSES --hostfile HOSTFILE_PATH python nytaxi2022_sgd.py
 ```
-Replace `HOSTFILE_PATH` with the path to your hostfile.
 
+Replace `HOSTFILE_PATH` with the path to your hostfile.
 
 The script will:
 
